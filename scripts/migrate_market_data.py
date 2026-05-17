@@ -30,15 +30,24 @@ from dotenv import load_dotenv
 
 load_dotenv(".env.local")
 
-SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("VITE_SUPABASE_ANON_KEY", "")
+SUPABASE_URL      = os.environ.get("VITE_SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.environ.get("VITE_SUPABASE_ANON_KEY", "")
+SERVICE_ROLE_KEY  = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
-if not SUPABASE_URL or not SUPABASE_KEY:
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     sys.exit("ERROR: VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY must be set in .env.local")
 
+if not SERVICE_ROLE_KEY:
+    sys.exit(
+        "ERROR: SUPABASE_SERVICE_ROLE_KEY is missing in .env.local\n"
+        "  Get it from: Supabase Dashboard -> Settings -> API -> service_role (secret)\n"
+        "  Add:  SUPABASE_SERVICE_ROLE_KEY=eyJ..."
+    )
+
+# Service role key bypasses RLS — required for bulk data insertion
 HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "apikey": SERVICE_ROLE_KEY,
+    "Authorization": f"Bearer {SERVICE_ROLE_KEY}",
     "Content-Type": "application/json",
 }
 
@@ -175,7 +184,7 @@ def fetch_csv(session, url: str) -> list[dict]:
         return []
 
 def migrate_nse():
-    print("\n── NSE Stocks ─────────────────────────────────────────────")
+    print("\n--- NSE Stocks -------------------------------------------")
     session = fetch_nse_session()
 
     # Build sector + cap maps from index CSVs
@@ -246,7 +255,7 @@ BSE_LIST_URL = (
 )
 
 def migrate_bse():
-    print("\n── BSE Stocks ─────────────────────────────────────────────")
+    print("\n--- BSE Stocks -------------------------------------------")
     try:
         r = requests.get(BSE_LIST_URL, headers=BSE_HEADERS, timeout=30)
         r.raise_for_status()
@@ -394,7 +403,7 @@ def parse_amfi(text: str) -> list[dict]:
     return records
 
 def migrate_mf():
-    print("\n── Mutual Funds ────────────────────────────────────────────")
+    print("\n--- Mutual Funds -----------------------------------------")
     print("  Downloading AMFI NAVAll.txt …")
     try:
         r = requests.get(AMFI_URL, timeout=60)
