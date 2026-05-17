@@ -297,19 +297,35 @@ def upsert_dividends(records: list[dict]) -> int:
 # ── Load symbols from DB ────────────────────────────────────────────────────
 
 def load_symbols(exchange: str | None, specific: list[str] | None) -> list[tuple[str, str]]:
-    """Returns list of (symbol, exchange) tuples."""
+    """Returns list of (symbol, exchange) tuples. Paginates to get all rows."""
     url = f"{SUPABASE_URL}/rest/v1/stocks"
-    params: dict = {"select": "symbol,exchange", "is_active": "eq.true", "limit": 10000}
-    if exchange:
-        params["exchange"] = f"eq.{exchange}"
-    r = requests.get(url, headers=DB_HEADERS, params=params, timeout=30)
-    if r.status_code != 200:
-        sys.exit(f"ERROR loading symbols: {r.status_code} {r.text[:200]}")
-    rows = r.json()
+    all_rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+
+    while True:
+        params: dict = {
+            "select": "symbol,exchange",
+            "is_active": "eq.true",
+            "limit": page_size,
+            "offset": offset,
+            "order": "symbol.asc",
+        }
+        if exchange:
+            params["exchange"] = f"eq.{exchange}"
+        r = requests.get(url, headers=DB_HEADERS, params=params, timeout=30)
+        if r.status_code != 200:
+            sys.exit(f"ERROR loading symbols: {r.status_code} {r.text[:200]}")
+        page = r.json()
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+
     if specific:
         specific_upper = [s.upper() for s in specific]
-        rows = [row for row in rows if row["symbol"].upper() in specific_upper]
-    return [(row["symbol"], row["exchange"]) for row in rows]
+        all_rows = [row for row in all_rows if row["symbol"].upper() in specific_upper]
+    return [(row["symbol"], row["exchange"]) for row in all_rows]
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
