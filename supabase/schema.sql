@@ -24,15 +24,10 @@ alter table public.profiles enable row level security;
 drop policy if exists "Users can view own profile"   on public.profiles;
 drop policy if exists "Users can update own profile" on public.profiles;
 drop policy if exists "Users can insert own profile" on public.profiles;
+create policy "Users can view own profile"   on public.profiles for select using (auth.uid() = id);
+create policy "Users can update own profile" on public.profiles for update using (auth.uid() = id);
+create policy "Users can insert own profile" on public.profiles for insert with check (auth.uid() = id);
 
-create policy "Users can view own profile"
-  on public.profiles for select using (auth.uid() = id);
-create policy "Users can update own profile"
-  on public.profiles for update using (auth.uid() = id);
-create policy "Users can insert own profile"
-  on public.profiles for insert with check (auth.uid() = id);
-
--- Auto-create profile on signup
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer as $$
 begin
@@ -51,10 +46,10 @@ create trigger on_auth_user_created
 -- ── Stocks ──────────────────────────────────────────────────
 create table if not exists public.stocks (
   id            uuid primary key default uuid_generate_v4(),
-  symbol        text not null unique,
+  symbol        text not null,
   name          text not null,
   exchange      text not null default 'NSE',
-  isin          text unique,
+  isin          text,
   sector        text,
   industry      text,
   cap_category  text check (cap_category in ('Large Cap','Mid Cap','Small Cap')),
@@ -66,15 +61,41 @@ create table if not exists public.stocks (
   updated_at    timestamptz default now()
 );
 
+-- Migrate unique constraint: symbol → (symbol, exchange)
+do $$ begin
+  -- drop old single-column unique if it exists
+  if exists (
+    select 1 from pg_constraint
+    where conname = 'stocks_symbol_key' and conrelid = 'public.stocks'::regclass
+  ) then
+    alter table public.stocks drop constraint stocks_symbol_key;
+  end if;
+  -- add composite unique if not exists
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'stocks_symbol_exchange_key' and conrelid = 'public.stocks'::regclass
+  ) then
+    alter table public.stocks add constraint stocks_symbol_exchange_key unique (symbol, exchange);
+  end if;
+  -- drop old isin unique if it exists (same ISIN appears on NSE and BSE)
+  if exists (
+    select 1 from pg_constraint
+    where conname = 'stocks_isin_key' and conrelid = 'public.stocks'::regclass
+  ) then
+    alter table public.stocks drop constraint stocks_isin_key;
+  end if;
+end $$;
+
 alter table public.stocks enable row level security;
 
 drop policy if exists "Stocks readable by all authenticated users" on public.stocks;
 create policy "Stocks readable by all authenticated users"
   on public.stocks for select to authenticated using (true);
 
-create index if not exists idx_stocks_symbol on public.stocks(symbol);
-create index if not exists idx_stocks_name   on public.stocks using gin(to_tsvector('english', name));
-create index if not exists idx_stocks_sector on public.stocks(sector);
+create index if not exists idx_stocks_symbol   on public.stocks(symbol);
+create index if not exists idx_stocks_exchange on public.stocks(exchange);
+create index if not exists idx_stocks_sector   on public.stocks(sector);
+create index if not exists idx_stocks_name_fts on public.stocks using gin(to_tsvector('english', name));
 
 -- ── Mutual Funds ─────────────────────────────────────────────
 create table if not exists public.mutual_funds (
@@ -106,9 +127,9 @@ create policy "Mutual funds readable by all authenticated users"
   on public.mutual_funds for select to authenticated using (true);
 
 create index if not exists idx_mf_scheme_code on public.mutual_funds(scheme_code);
-create index if not exists idx_mf_name        on public.mutual_funds using gin(to_tsvector('english', name));
 create index if not exists idx_mf_category    on public.mutual_funds(category);
 create index if not exists idx_mf_amc         on public.mutual_funds(amc);
+create index if not exists idx_mf_name_fts    on public.mutual_funds using gin(to_tsvector('english', name));
 
 -- ── Portfolio Transactions ───────────────────────────────────
 create table if not exists public.portfolio_transactions (
@@ -135,15 +156,10 @@ drop policy if exists "Users can view own transactions"   on public.portfolio_tr
 drop policy if exists "Users can insert own transactions" on public.portfolio_transactions;
 drop policy if exists "Users can update own transactions" on public.portfolio_transactions;
 drop policy if exists "Users can delete own transactions" on public.portfolio_transactions;
-
-create policy "Users can view own transactions"
-  on public.portfolio_transactions for select using (auth.uid() = user_id);
-create policy "Users can insert own transactions"
-  on public.portfolio_transactions for insert with check (auth.uid() = user_id);
-create policy "Users can update own transactions"
-  on public.portfolio_transactions for update using (auth.uid() = user_id);
-create policy "Users can delete own transactions"
-  on public.portfolio_transactions for delete using (auth.uid() = user_id);
+create policy "Users can view own transactions"   on public.portfolio_transactions for select using (auth.uid() = user_id);
+create policy "Users can insert own transactions" on public.portfolio_transactions for insert with check (auth.uid() = user_id);
+create policy "Users can update own transactions" on public.portfolio_transactions for update using (auth.uid() = user_id);
+create policy "Users can delete own transactions" on public.portfolio_transactions for delete using (auth.uid() = user_id);
 
 create index if not exists idx_ptxn_user_id on public.portfolio_transactions(user_id);
 create index if not exists idx_ptxn_symbol  on public.portfolio_transactions(user_id, symbol);
@@ -172,15 +188,10 @@ drop policy if exists "Users can view own holdings"   on public.portfolio_holdin
 drop policy if exists "Users can insert own holdings" on public.portfolio_holdings;
 drop policy if exists "Users can update own holdings" on public.portfolio_holdings;
 drop policy if exists "Users can delete own holdings" on public.portfolio_holdings;
-
-create policy "Users can view own holdings"
-  on public.portfolio_holdings for select using (auth.uid() = user_id);
-create policy "Users can insert own holdings"
-  on public.portfolio_holdings for insert with check (auth.uid() = user_id);
-create policy "Users can update own holdings"
-  on public.portfolio_holdings for update using (auth.uid() = user_id);
-create policy "Users can delete own holdings"
-  on public.portfolio_holdings for delete using (auth.uid() = user_id);
+create policy "Users can view own holdings"   on public.portfolio_holdings for select using (auth.uid() = user_id);
+create policy "Users can insert own holdings" on public.portfolio_holdings for insert with check (auth.uid() = user_id);
+create policy "Users can update own holdings" on public.portfolio_holdings for update using (auth.uid() = user_id);
+create policy "Users can delete own holdings" on public.portfolio_holdings for delete using (auth.uid() = user_id);
 
 create index if not exists idx_ph_user_id on public.portfolio_holdings(user_id);
 
@@ -216,20 +227,14 @@ alter table public.watchlist_items enable row level security;
 drop policy if exists "Users can manage own watchlist items" on public.watchlist_items;
 create policy "Users can manage own watchlist items"
   on public.watchlist_items for all
-  using (
-    exists (
-      select 1 from public.watchlists w
-      where w.id = watchlist_items.watchlist_id
-        and w.user_id = auth.uid()
-    )
-  )
-  with check (
-    exists (
-      select 1 from public.watchlists w
-      where w.id = watchlist_items.watchlist_id
-        and w.user_id = auth.uid()
-    )
-  );
+  using (exists (
+    select 1 from public.watchlists w
+    where w.id = watchlist_items.watchlist_id and w.user_id = auth.uid()
+  ))
+  with check (exists (
+    select 1 from public.watchlists w
+    where w.id = watchlist_items.watchlist_id and w.user_id = auth.uid()
+  ));
 
 -- ── Alerts ───────────────────────────────────────────────────
 create table if not exists public.alerts (
@@ -269,38 +274,27 @@ alter table public.fundamentals_cache enable row level security;
 
 drop policy if exists "Authenticated users can read fundamentals cache" on public.fundamentals_cache;
 drop policy if exists "Service role can write fundamentals cache"        on public.fundamentals_cache;
-
 create policy "Authenticated users can read fundamentals cache"
   on public.fundamentals_cache for select to authenticated using (true);
 create policy "Service role can write fundamentals cache"
   on public.fundamentals_cache for all to service_role using (true) with check (true);
 
--- ── Updated-at trigger helper ────────────────────────────────
+-- ── Updated-at triggers ──────────────────────────────────────
 create or replace function public.set_updated_at()
 returns trigger language plpgsql as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
+begin new.updated_at = now(); return new; end;
 $$;
 
-drop trigger if exists trg_profiles_updated_at  on public.profiles;
-drop trigger if exists trg_stocks_updated_at    on public.stocks;
-drop trigger if exists trg_mf_updated_at        on public.mutual_funds;
-drop trigger if exists trg_holdings_updated_at  on public.portfolio_holdings;
+drop trigger if exists trg_profiles_updated_at on public.profiles;
+drop trigger if exists trg_stocks_updated_at   on public.stocks;
+drop trigger if exists trg_mf_updated_at       on public.mutual_funds;
+drop trigger if exists trg_holdings_updated_at on public.portfolio_holdings;
 
-create trigger trg_profiles_updated_at
-  before update on public.profiles
+create trigger trg_profiles_updated_at before update on public.profiles
   for each row execute function public.set_updated_at();
-
-create trigger trg_stocks_updated_at
-  before update on public.stocks
+create trigger trg_stocks_updated_at before update on public.stocks
   for each row execute function public.set_updated_at();
-
-create trigger trg_mf_updated_at
-  before update on public.mutual_funds
+create trigger trg_mf_updated_at before update on public.mutual_funds
   for each row execute function public.set_updated_at();
-
-create trigger trg_holdings_updated_at
-  before update on public.portfolio_holdings
+create trigger trg_holdings_updated_at before update on public.portfolio_holdings
   for each row execute function public.set_updated_at();
