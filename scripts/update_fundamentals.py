@@ -178,68 +178,89 @@ def _date(module: dict, key: str) -> str | None:
             return datetime.utcfromtimestamp(ts).date().isoformat()
     return None
 
+# All columns that must be present in every record sent to PostgREST.
+# PGRST102 fires when records in the same batch have different key sets.
+_FUNDAMENTAL_KEYS = (
+    "symbol", "exchange", "week52_high", "week52_low", "week52_range_pct",
+    "pe_ratio", "forward_pe", "pb_ratio", "eps", "eps_forward",
+    "dividend_yield", "dividend_rate", "ex_dividend_date",
+    "last_dividend_value", "last_dividend_date",
+    "market_cap", "beta", "roe", "debt_to_equity",
+    "revenue", "net_income", "analyst_target", "recommendation",
+    "fetched_at",
+)
+
 def build_fundamental(
     symbol: str,
     exchange: str,
     quote: dict,
     summary: dict | None = None,
 ) -> dict:
-    price    = quote.get("regularMarketPrice")
-    w52h     = quote.get("fiftyTwoWeekHigh")
-    w52l     = quote.get("fiftyTwoWeekLow")
+    price = quote.get("regularMarketPrice")
+    w52h  = quote.get("fiftyTwoWeekHigh")
+    w52l  = quote.get("fiftyTwoWeekLow")
     range_pct = None
     if price and w52h and w52l and (w52h - w52l) > 0:
         range_pct = round((price - w52l) / (w52h - w52l) * 100, 2)
 
-    rec = {
-        "symbol":           symbol,
-        "exchange":         exchange,
-        "week52_high":      w52h,
-        "week52_low":       w52l,
-        "week52_range_pct": range_pct,
-        "pe_ratio":         quote.get("trailingPE"),
-        "forward_pe":       quote.get("forwardPE"),
-        "pb_ratio":         quote.get("priceToBook"),
-        "eps":              quote.get("epsTrailingTwelveMonths"),
-        "eps_forward":      quote.get("epsForward"),
-        "dividend_yield":   (
-            round(quote.get("trailingAnnualDividendYield", 0) * 100, 4)
-            if quote.get("trailingAnnualDividendYield") else None
-        ),
-        "dividend_rate":    quote.get("trailingAnnualDividendRate"),
-        "market_cap":       quote.get("marketCap"),
-        "beta":             quote.get("beta"),
-        "fetched_at":       datetime.utcnow().isoformat(),
+    dy_raw = quote.get("trailingAnnualDividendYield")
+
+    # ex-dividend date from quote (Unix timestamp)
+    dd = quote.get("dividendDate")
+    ex_div_date = datetime.utcfromtimestamp(dd).date().isoformat() if dd else None
+
+    rec: dict = {
+        "symbol":             symbol,
+        "exchange":           exchange,
+        "week52_high":        w52h,
+        "week52_low":         w52l,
+        "week52_range_pct":   range_pct,
+        "pe_ratio":           quote.get("trailingPE"),
+        "forward_pe":         quote.get("forwardPE"),
+        "pb_ratio":           quote.get("priceToBook"),
+        "eps":                quote.get("epsTrailingTwelveMonths"),
+        "eps_forward":        quote.get("epsForward"),
+        "dividend_yield":     round(dy_raw * 100, 4) if dy_raw else None,
+        "dividend_rate":      quote.get("trailingAnnualDividendRate"),
+        "ex_dividend_date":   ex_div_date,
+        "last_dividend_value": None,
+        "last_dividend_date":  None,
+        "market_cap":         quote.get("marketCap"),
+        "beta":               quote.get("beta"),
+        "roe":                None,
+        "debt_to_equity":     None,
+        "revenue":            None,
+        "net_income":         None,
+        "analyst_target":     None,
+        "recommendation":     None,
+        "fetched_at":         datetime.utcnow().isoformat(),
     }
 
-    # ex-dividend date from quote
-    dd = quote.get("dividendDate")
-    if dd:
-        rec["ex_dividend_date"] = datetime.utcfromtimestamp(dd).date().isoformat()
-
     if summary:
-        ks  = summary.get("defaultKeyStatistics", {})
-        sd  = summary.get("summaryDetail", {})
-        fd  = summary.get("financialData", {})
+        ks = summary.get("defaultKeyStatistics", {})
+        sd = summary.get("summaryDetail", {})
+        fd = summary.get("financialData", {})
 
-        rec["pb_ratio"]          = rec["pb_ratio"] or _raw(ks, "priceToBook")
-        rec["forward_pe"]        = rec["forward_pe"] or _raw(sd, "forwardPE")
-        rec["roe"]               = (
-            round(_raw(fd, "returnOnEquity") * 100, 2)
-            if _raw(fd, "returnOnEquity") else None
-        )
-        rec["debt_to_equity"]    = _raw(fd, "debtToEquity")
-        rec["revenue"]           = _raw(fd, "totalRevenue")
-        rec["net_income"]        = _raw(fd, "netIncomeToCommon")
-        rec["analyst_target"]    = _raw(fd, "targetMeanPrice")
-        rec["recommendation"]    = (fd.get("recommendationKey") or {}).get("raw") if isinstance(fd.get("recommendationKey"), dict) else fd.get("recommendationKey")
+        rec["pb_ratio"]   = rec["pb_ratio"] or _raw(ks, "priceToBook")
+        rec["forward_pe"] = rec["forward_pe"] or _raw(sd, "forwardPE")
+
+        roe_raw = _raw(fd, "returnOnEquity")
+        rec["roe"]             = round(roe_raw * 100, 2) if roe_raw else None
+        rec["debt_to_equity"]  = _raw(fd, "debtToEquity")
+        rec["revenue"]         = _raw(fd, "totalRevenue")
+        rec["net_income"]      = _raw(fd, "netIncomeToCommon")
+        rec["analyst_target"]  = _raw(fd, "targetMeanPrice")
+
+        rk = fd.get("recommendationKey")
+        rec["recommendation"] = rk.get("raw") if isinstance(rk, dict) else rk
+
         rec["last_dividend_value"] = _raw(ks, "lastDividendValue")
         rec["last_dividend_date"]  = _date(ks, "lastDividendDate")
-        if not rec.get("ex_dividend_date"):
+        if not rec["ex_dividend_date"]:
             rec["ex_dividend_date"] = _date(sd, "exDividendDate")
 
-    # Remove None values to avoid overwriting good data with nulls
-    return {k: v for k, v in rec.items() if v is not None or k in ("symbol", "exchange", "fetched_at")}
+    # Guarantee every key is present (PostgREST PGRST102 requires uniform keys per batch)
+    return {k: rec.get(k) for k in _FUNDAMENTAL_KEYS}
 
 # ── Supabase write ──────────────────────────────────────────────────────────
 
