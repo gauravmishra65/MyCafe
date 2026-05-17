@@ -24,7 +24,7 @@ import sys
 import time
 import json
 import requests
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from dotenv import load_dotenv
 
 # ── Config ─────────────────────────────────────────────────────────────────
@@ -153,7 +153,7 @@ def fetch_dividend_history(yahoo_symbol: str) -> list[dict]:
     )
     history = []
     for ts, div in events.items():
-        ex_date = datetime.utcfromtimestamp(int(ts)).date()
+        ex_date = datetime.fromtimestamp(int(ts)).date()
         history.append({
             "ex_date": ex_date.isoformat(),
             "amount":  round(div.get("amount", 0), 4),
@@ -175,7 +175,7 @@ def _date(module: dict, key: str) -> str | None:
     if isinstance(v, dict):
         ts = v.get("raw")
         if ts:
-            return datetime.utcfromtimestamp(ts).date().isoformat()
+            return datetime.fromtimestamp(ts).date().isoformat()
     return None
 
 # All columns that must be present in every record sent to PostgREST.
@@ -207,7 +207,7 @@ def build_fundamental(
 
     # ex-dividend date from quote (Unix timestamp)
     dd = quote.get("dividendDate")
-    ex_div_date = datetime.utcfromtimestamp(dd).date().isoformat() if dd else None
+    ex_div_date = datetime.fromtimestamp(dd).date().isoformat() if dd else None
 
     rec: dict = {
         "symbol":             symbol,
@@ -233,7 +233,7 @@ def build_fundamental(
         "net_income":         None,
         "analyst_target":     None,
         "recommendation":     None,
-        "fetched_at":         datetime.utcnow().isoformat(),
+        "fetched_at":         datetime.now(timezone.utc).isoformat(),
     }
 
     if summary:
