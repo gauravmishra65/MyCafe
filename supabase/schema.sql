@@ -1,5 +1,5 @@
 -- ============================================================
--- MyCafe Database Schema
+-- MyCafe Database Schema  (idempotent — safe to re-run)
 -- Run this entire file in Supabase SQL Editor
 -- ============================================================
 
@@ -20,6 +20,10 @@ create table if not exists public.profiles (
 );
 
 alter table public.profiles enable row level security;
+
+drop policy if exists "Users can view own profile"   on public.profiles;
+drop policy if exists "Users can update own profile" on public.profiles;
+drop policy if exists "Users can insert own profile" on public.profiles;
 
 create policy "Users can view own profile"
   on public.profiles for select using (auth.uid() = id);
@@ -63,6 +67,8 @@ create table if not exists public.stocks (
 );
 
 alter table public.stocks enable row level security;
+
+drop policy if exists "Stocks readable by all authenticated users" on public.stocks;
 create policy "Stocks readable by all authenticated users"
   on public.stocks for select to authenticated using (true);
 
@@ -94,6 +100,8 @@ create table if not exists public.mutual_funds (
 );
 
 alter table public.mutual_funds enable row level security;
+
+drop policy if exists "Mutual funds readable by all authenticated users" on public.mutual_funds;
 create policy "Mutual funds readable by all authenticated users"
   on public.mutual_funds for select to authenticated using (true);
 
@@ -122,6 +130,11 @@ create table if not exists public.portfolio_transactions (
 );
 
 alter table public.portfolio_transactions enable row level security;
+
+drop policy if exists "Users can view own transactions"   on public.portfolio_transactions;
+drop policy if exists "Users can insert own transactions" on public.portfolio_transactions;
+drop policy if exists "Users can update own transactions" on public.portfolio_transactions;
+drop policy if exists "Users can delete own transactions" on public.portfolio_transactions;
 
 create policy "Users can view own transactions"
   on public.portfolio_transactions for select using (auth.uid() = user_id);
@@ -155,6 +168,11 @@ create table if not exists public.portfolio_holdings (
 
 alter table public.portfolio_holdings enable row level security;
 
+drop policy if exists "Users can view own holdings"   on public.portfolio_holdings;
+drop policy if exists "Users can insert own holdings" on public.portfolio_holdings;
+drop policy if exists "Users can update own holdings" on public.portfolio_holdings;
+drop policy if exists "Users can delete own holdings" on public.portfolio_holdings;
+
 create policy "Users can view own holdings"
   on public.portfolio_holdings for select using (auth.uid() = user_id);
 create policy "Users can insert own holdings"
@@ -176,6 +194,7 @@ create table if not exists public.watchlists (
 
 alter table public.watchlists enable row level security;
 
+drop policy if exists "Users can manage own watchlists" on public.watchlists;
 create policy "Users can manage own watchlists"
   on public.watchlists for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -194,6 +213,7 @@ create table if not exists public.watchlist_items (
 
 alter table public.watchlist_items enable row level security;
 
+drop policy if exists "Users can manage own watchlist items" on public.watchlist_items;
 create policy "Users can manage own watchlist items"
   on public.watchlist_items for all
   using (
@@ -231,6 +251,7 @@ create table if not exists public.alerts (
 
 alter table public.alerts enable row level security;
 
+drop policy if exists "Users can manage own alerts" on public.alerts;
 create policy "Users can manage own alerts"
   on public.alerts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -245,12 +266,16 @@ create table if not exists public.fundamentals_cache (
 );
 
 alter table public.fundamentals_cache enable row level security;
+
+drop policy if exists "Authenticated users can read fundamentals cache" on public.fundamentals_cache;
+drop policy if exists "Service role can write fundamentals cache"        on public.fundamentals_cache;
+
 create policy "Authenticated users can read fundamentals cache"
   on public.fundamentals_cache for select to authenticated using (true);
 create policy "Service role can write fundamentals cache"
   on public.fundamentals_cache for all to service_role using (true) with check (true);
 
--- ── Updated-at trigger ───────────────────────────────────────
+-- ── Updated-at trigger helper ────────────────────────────────
 create or replace function public.set_updated_at()
 returns trigger language plpgsql as $$
 begin
@@ -258,6 +283,11 @@ begin
   return new;
 end;
 $$;
+
+drop trigger if exists trg_profiles_updated_at  on public.profiles;
+drop trigger if exists trg_stocks_updated_at    on public.stocks;
+drop trigger if exists trg_mf_updated_at        on public.mutual_funds;
+drop trigger if exists trg_holdings_updated_at  on public.portfolio_holdings;
 
 create trigger trg_profiles_updated_at
   before update on public.profiles
