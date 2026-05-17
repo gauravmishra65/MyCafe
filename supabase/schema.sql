@@ -279,6 +279,80 @@ create policy "Authenticated users can read fundamentals cache"
 create policy "Service role can write fundamentals cache"
   on public.fundamentals_cache for all to service_role using (true) with check (true);
 
+-- ── Stock Fundamentals ───────────────────────────────────────
+-- Stores daily-refreshed fundamental metrics per stock
+create table if not exists public.stock_fundamentals (
+  id                  uuid primary key default uuid_generate_v4(),
+  symbol              text not null,
+  exchange            text not null default 'NSE',
+  -- 52-week range
+  week52_high         numeric,
+  week52_low          numeric,
+  week52_range_pct    numeric,  -- where current price sits in the 52W range (0-100)
+  -- Valuation
+  pe_ratio            numeric,  -- trailing P/E
+  forward_pe          numeric,
+  pb_ratio            numeric,  -- price-to-book
+  eps                 numeric,  -- trailing EPS (INR)
+  eps_forward         numeric,
+  -- Dividend
+  dividend_yield      numeric,  -- %
+  dividend_rate       numeric,  -- annual dividend per share (INR)
+  ex_dividend_date    date,
+  last_dividend_value numeric,  -- most recent dividend per share (INR)
+  last_dividend_date  date,
+  -- Other key metrics
+  market_cap          numeric,
+  beta                numeric,
+  roe                 numeric,  -- return on equity %
+  debt_to_equity      numeric,
+  revenue             numeric,
+  net_income          numeric,
+  analyst_target      numeric,
+  recommendation      text,
+  -- Meta
+  fetched_at          timestamptz default now(),
+  unique(symbol, exchange)
+);
+
+alter table public.stock_fundamentals enable row level security;
+
+drop policy if exists "Anyone can read stock fundamentals" on public.stock_fundamentals;
+drop policy if exists "Service role can write stock fundamentals" on public.stock_fundamentals;
+create policy "Anyone can read stock fundamentals"
+  on public.stock_fundamentals for select to authenticated using (true);
+create policy "Service role can write stock fundamentals"
+  on public.stock_fundamentals for all to service_role using (true) with check (true);
+
+create index if not exists idx_sf_symbol   on public.stock_fundamentals(symbol);
+create index if not exists idx_sf_exchange on public.stock_fundamentals(exchange);
+
+-- ── Stock Dividends ──────────────────────────────────────────
+-- Historical dividend payments per stock
+create table if not exists public.stock_dividends (
+  id          uuid primary key default uuid_generate_v4(),
+  symbol      text not null,
+  exchange    text not null default 'NSE',
+  amount      numeric not null,   -- dividend per share (INR)
+  ex_date     date not null,
+  pay_date    date,
+  div_type    text default 'Cash', -- Cash / Special / Stock
+  created_at  timestamptz default now(),
+  unique(symbol, exchange, ex_date)
+);
+
+alter table public.stock_dividends enable row level security;
+
+drop policy if exists "Anyone can read stock dividends" on public.stock_dividends;
+drop policy if exists "Service role can write stock dividends" on public.stock_dividends;
+create policy "Anyone can read stock dividends"
+  on public.stock_dividends for select to authenticated using (true);
+create policy "Service role can write stock dividends"
+  on public.stock_dividends for all to service_role using (true) with check (true);
+
+create index if not exists idx_sd_symbol   on public.stock_dividends(symbol, exchange);
+create index if not exists idx_sd_ex_date  on public.stock_dividends(ex_date desc);
+
 -- ── Updated-at triggers ──────────────────────────────────────
 create or replace function public.set_updated_at()
 returns trigger language plpgsql as $$

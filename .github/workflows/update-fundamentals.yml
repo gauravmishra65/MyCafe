@@ -1,0 +1,62 @@
+name: Update Stock Fundamentals
+
+on:
+  schedule:
+    # 6:30 PM IST = 13:00 UTC (runs after NSE/BSE market close at 3:30 PM IST)
+    - cron: "0 13 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      exchange:
+        description: "Exchange (NSE / BSE / leave empty for both)"
+        required: false
+        default: ""
+      mode:
+        description: "Mode"
+        required: false
+        default: "quick"
+        type: choice
+        options: [quick, full, full-dividends]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+
+      - name: Write .env.local
+        run: |
+          echo "VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}" >> .env.local
+          echo "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" >> .env.local
+
+      - name: Update NSE fundamentals (quick)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == 'quick' }}
+        run: python scripts/update_fundamentals.py --exchange NSE
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Update BSE fundamentals (quick)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == 'quick' }}
+        run: python scripts/update_fundamentals.py --exchange BSE
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Update NSE fundamentals (full)
+        if: ${{ github.event.inputs.mode == 'full' || github.event.inputs.mode == 'full-dividends' }}
+        run: |
+          ARGS="--full --exchange ${{ github.event.inputs.exchange || 'NSE' }}"
+          if [ "${{ github.event.inputs.mode }}" = "full-dividends" ]; then
+            ARGS="$ARGS --dividends"
+          fi
+          python scripts/update_fundamentals.py $ARGS
+        env:
+          PYTHONIOENCODING: utf-8

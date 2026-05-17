@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, TrendingUp, TrendingDown, Star, Plus, Bell } from "lucide-react";
+import { ArrowLeft, TrendingUp, TrendingDown, Star, Plus, Bell, Calendar } from "lucide-react";
 import { marketApi } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { formatINR, formatPct, formatVolume, changeBg, changeColor } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from "recharts";
 import type { Candle } from "@/types";
 import toast from "react-hot-toast";
 
@@ -19,6 +19,15 @@ const RANGES = [
   { label: "1Y", range: "1y", interval: "1d" },
   { label: "5Y", range: "5y", interval: "1mo" },
 ];
+
+function fmt(v: number | null | undefined, decimals = 2) {
+  if (v == null) return "—";
+  return v.toFixed(decimals);
+}
+function fmtPct(v: number | null | undefined) {
+  if (v == null) return "—";
+  return `${v.toFixed(2)}%`;
+}
 
 export default function StockDetailPage() {
   const { symbol } = useParams<{ symbol: string }>();
@@ -40,8 +49,38 @@ export default function StockDetailPage() {
   const { data: stockInfo } = useQuery({
     queryKey: ["stock-info", symbol],
     queryFn: async () => {
-      const { data } = await supabase.from("stocks").select("*").eq("symbol", symbol).single();
+      const { data } = await supabase.from("stocks").select("*").eq("symbol", symbol).eq("exchange", "NSE").single();
       return data;
+    },
+  });
+
+  // Stored fundamentals (updated daily by update_fundamentals.py)
+  const { data: fundamentals } = useQuery({
+    queryKey: ["stock-fundamentals", symbol],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("stock_fundamentals")
+        .select("*")
+        .eq("symbol", symbol)
+        .eq("exchange", "NSE")
+        .single();
+      return data;
+    },
+    staleTime: 60 * 60 * 1000, // 1 hour — refreshed daily by script
+  });
+
+  // Dividend history
+  const { data: dividends = [] } = useQuery({
+    queryKey: ["stock-dividends", symbol],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("stock_dividends")
+        .select("*")
+        .eq("symbol", symbol)
+        .eq("exchange", "NSE")
+        .order("ex_date", { ascending: false })
+        .limit(10);
+      return data ?? [];
     },
   });
 
@@ -54,6 +93,14 @@ export default function StockDetailPage() {
     }));
 
   const positive = quote ? quote.changePct >= 0 : true;
+
+  // Prefer live quote for 52W data, fall back to stored fundamentals
+  const w52High = quote?.fiftyTwoWeekHigh ?? fundamentals?.week52_high;
+  const w52Low  = quote?.fiftyTwoWeekLow  ?? fundamentals?.week52_low;
+  const currentPrice = quote?.price;
+  const rangePct = w52High && w52Low && currentPrice && (w52High - w52Low) > 0
+    ? ((currentPrice - w52Low) / (w52High - w52Low)) * 100
+    : fundamentals?.week52_range_pct;
 
   const handleAddToWatchlist = async () => {
     if (!stockInfo) { toast.error("Stock not found in database"); return; }
@@ -110,17 +157,20 @@ export default function StockDetailPage() {
             <div><p className="text-xs text-slate-500">Volume</p><p className="tabular-nums text-slate-200">{formatVolume(quote.volume)}</p></div>
           </div>
 
-          {/* 52W */}
-          {quote.fiftyTwoWeekHigh && quote.fiftyTwoWeekLow && (
+          {/* 52W range bar */}
+          {w52High && w52Low && (
             <div className="mt-3">
               <div className="flex justify-between text-xs text-slate-500 mb-1">
-                <span>52W Low: {formatINR(quote.fiftyTwoWeekLow)}</span>
-                <span>52W High: {formatINR(quote.fiftyTwoWeekHigh)}</span>
+                <span>52W Low: {formatINR(w52Low)}</span>
+                <span className="text-slate-400">
+                  {rangePct != null ? `${rangePct.toFixed(1)}% of range` : ""}
+                </span>
+                <span>52W High: {formatINR(w52High)}</span>
               </div>
-              <div className="h-1.5 bg-[#0A0E1A] rounded-full overflow-hidden">
+              <div className="h-2 bg-[#0A0E1A] rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-blue-500 rounded-full"
-                  style={{ width: `${((quote.price - quote.fiftyTwoWeekLow) / (quote.fiftyTwoWeekHigh - quote.fiftyTwoWeekLow)) * 100}%` }}
+                  className="h-full rounded-full bg-gradient-to-r from-red-500 via-yellow-400 to-emerald-500"
+                  style={{ width: `${Math.min(100, Math.max(0, rangePct ?? 0))}%` }}
                 />
               </div>
             </div>
@@ -178,23 +228,122 @@ export default function StockDetailPage() {
       </div>
 
       {/* Key stats */}
-      {quote && (
+      {(quote || fundamentals) && (
         <div className="bg-[#1A2236] border border-[#1E293B] rounded-xl p-4">
           <h3 className="text-sm font-semibold text-slate-200 mb-3">Key Statistics</h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { label: "Market Cap", value: quote.marketCap ? formatINR(quote.marketCap, true) : "—" },
-              { label: "52W High", value: quote.fiftyTwoWeekHigh ? formatINR(quote.fiftyTwoWeekHigh) : "—" },
-              { label: "52W Low", value: quote.fiftyTwoWeekLow ? formatINR(quote.fiftyTwoWeekLow) : "—" },
-              { label: "Prev Close", value: formatINR(quote.previousClose) },
-              { label: "Open", value: formatINR(quote.open) },
-              { label: "Day High", value: formatINR(quote.high) },
-              { label: "Day Low", value: formatINR(quote.low) },
-              { label: "Volume", value: formatVolume(quote.volume) },
+              { label: "Market Cap",    value: quote?.marketCap ? formatINR(quote.marketCap, true) : "—" },
+              { label: "52W High",      value: w52High ? formatINR(w52High) : "—" },
+              { label: "52W Low",       value: w52Low ? formatINR(w52Low) : "—" },
+              { label: "Prev Close",    value: formatINR(quote?.previousClose) },
+              { label: "Open",          value: formatINR(quote?.open) },
+              { label: "Day High",      value: formatINR(quote?.high) },
+              { label: "Day Low",       value: formatINR(quote?.low) },
+              { label: "Volume",        value: formatVolume(quote?.volume) },
             ].map(({ label, value }) => (
               <div key={label} className="bg-[#0A0E1A] rounded-lg p-2.5">
                 <p className="text-xs text-slate-500 mb-0.5">{label}</p>
                 <p className="text-sm font-semibold text-slate-200 tabular-nums">{value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Fundamentals panel — from stored daily data */}
+      {fundamentals && (
+        <div className="bg-[#1A2236] border border-[#1E293B] rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-slate-200">Fundamentals</h3>
+            {fundamentals.fetched_at && (
+              <span className="text-xs text-slate-500">
+                Updated {new Date(fundamentals.fetched_at).toLocaleDateString("en-IN")}
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: "P/E Ratio",      value: fmt(fundamentals.pe_ratio) },
+              { label: "Forward P/E",    value: fmt(fundamentals.forward_pe) },
+              { label: "P/B Ratio",      value: fmt(fundamentals.pb_ratio) },
+              { label: "EPS (TTM)",      value: fundamentals.eps ? formatINR(fundamentals.eps) : "—" },
+              { label: "EPS Forward",    value: fundamentals.eps_forward ? formatINR(fundamentals.eps_forward) : "—" },
+              { label: "Div Yield",      value: fundamentals.dividend_yield ? fmtPct(fundamentals.dividend_yield) : "—" },
+              { label: "Div Rate",       value: fundamentals.dividend_rate ? formatINR(fundamentals.dividend_rate) : "—" },
+              { label: "Beta",           value: fmt(fundamentals.beta) },
+              { label: "ROE",            value: fmtPct(fundamentals.roe) },
+              { label: "Debt/Equity",    value: fmt(fundamentals.debt_to_equity) },
+              { label: "Analyst Target", value: fundamentals.analyst_target ? formatINR(fundamentals.analyst_target) : "—" },
+              { label: "Recommendation", value: (fundamentals.recommendation ?? "—").toString().replace(/_/g, " ").toUpperCase() },
+            ].map(({ label, value }) => (
+              <div key={label} className="bg-[#0A0E1A] rounded-lg p-2.5">
+                <p className="text-xs text-slate-500 mb-0.5">{label}</p>
+                <p className="text-sm font-semibold text-slate-200 tabular-nums capitalize">{value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Dividend info */}
+          {(fundamentals.ex_dividend_date || fundamentals.last_dividend_value) && (
+            <div className="mt-3 pt-3 border-t border-[#1E293B] flex flex-wrap gap-4 text-sm">
+              {fundamentals.last_dividend_value && (
+                <div>
+                  <span className="text-xs text-slate-500">Last Dividend</span>
+                  <p className="text-slate-200 tabular-nums">{formatINR(fundamentals.last_dividend_value)}
+                    {fundamentals.last_dividend_date && (
+                      <span className="text-xs text-slate-500 ml-2">
+                        on {new Date(fundamentals.last_dividend_date).toLocaleDateString("en-IN")}
+                      </span>
+                    )}
+                  </p>
+                </div>
+              )}
+              {fundamentals.ex_dividend_date && (
+                <div>
+                  <span className="text-xs text-slate-500">Ex-Dividend Date</span>
+                  <p className="text-slate-200">{new Date(fundamentals.ex_dividend_date).toLocaleDateString("en-IN")}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Dividend history chart */}
+      {dividends.length > 0 && (
+        <div className="bg-[#1A2236] border border-[#1E293B] rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Calendar className="w-4 h-4 text-yellow-400" />
+            <h3 className="text-sm font-semibold text-slate-200">Dividend History</h3>
+          </div>
+          <ResponsiveContainer width="100%" height={140}>
+            <BarChart data={[...dividends].reverse()} margin={{ top: 4, right: 4, left: 0, bottom: 4 }}>
+              <XAxis
+                dataKey="ex_date"
+                tickFormatter={(d) => new Date(d).toLocaleDateString("en-IN", { month: "short", year: "2-digit" })}
+                tick={{ fontSize: 10, fill: "#475569" }}
+                tickLine={false}
+                axisLine={false}
+              />
+              <YAxis tick={{ fontSize: 10, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(v) => `₹${v}`} width={45} />
+              <Tooltip
+                contentStyle={{ background: "#1A2236", border: "1px solid #1E293B", borderRadius: 8, fontSize: 12 }}
+                formatter={(v: unknown) => [formatINR(v as number), "Dividend"]}
+                labelFormatter={(d) => `Ex-date: ${new Date(d as string).toLocaleDateString("en-IN")}`}
+              />
+              <Bar dataKey="amount" radius={[3, 3, 0, 0]}>
+                {dividends.map((_, i) => (
+                  <Cell key={i} fill="#F59E0B" fillOpacity={0.8} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+            {dividends.map((d: { ex_date: string; amount: number; pay_date?: string }) => (
+              <div key={d.ex_date} className="flex justify-between text-xs text-slate-400 py-0.5">
+                <span>{new Date(d.ex_date).toLocaleDateString("en-IN")}</span>
+                <span className="text-yellow-400 tabular-nums font-medium">{formatINR(d.amount)}</span>
               </div>
             ))}
           </div>
